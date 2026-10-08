@@ -42,6 +42,7 @@ npm run dev
 2. 进入 **SQL Editor**，按文件名顺序执行：
    - `supabase/migrations/202610080001_initial.sql`
    - `supabase/migrations/202610090001_medicine_library.sql`
+   - `supabase/migrations/202610090002_schedule_weekdays.sql`
 3. 进入 **Authentication → Providers → Email**，启用 Email；生产环境建议保留邮箱确认。
 4. 进入 **Authentication → URL Configuration**。本地开发时将 Redirect URLs 加入 `http://localhost:3000/auth/callback/`。GitHub Pages 部署完成后，还需要加入下文列出的正式回调地址。
 5. 进入 **Project Settings → API**，复制 Project URL 和 publishable/anon key。不要使用或暴露 `service_role` key。
@@ -64,6 +65,10 @@ NEXT_PUBLIC_BASE_PATH=
 3. 该增量迁移为现有药品增加选填资料字段，为地点增加主要/备用及储备天数设置，并新增安全 RPC、计划储备计算、地点临期统计和照片策略；不会清空或覆盖现有库存及历史记录。已有空间会自动把排序最前的有效地点标记为主要地点，其余地点默认备用 7 天，之后可在页面调整。
 4. 迁移会自动创建私有 Storage bucket `medicine-photos`，并限制为已获授权的空间成员读取、editor/owner 上传和删除。无需在 Storage 页面手动新建公开 bucket。
 5. 将更新后的项目文件上传 GitHub，等待原有 GitHub Pages 工作流重新部署。无需新增环境变量，也不要把 `service_role` key 放到前端。
+
+### 修复所在地与用药计划保存
+
+已经执行过 `202610090001_medicine_library.sql` 的项目，只需再在 **SQL Editor → New query** 中完整执行 `supabase/migrations/202610090002_schedule_weekdays.sql`。这份增量迁移只更新用药计划保存函数，使“指定星期”能够写入已有的 `days_of_week` 字段；不会删除或重建现有计划、库存和历史数据。所在地切换的修复仅涉及前端，无需额外数据库变更。
 
 ## 建议的人工验收
 
