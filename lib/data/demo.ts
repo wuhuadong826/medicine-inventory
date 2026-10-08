@@ -14,7 +14,8 @@ const ids = {
 
 function med(partial: Partial<MedicineSummary> & Pick<MedicineSummary, "id" | "name" | "locations">): MedicineSummary {
   return {
-    specification: "", unitName: "粒", unitsPerBox: 50, precision: 0,
+    specification: "", category: "", brand: "", dosageForm: "", packagingSpec: "",
+    origin: "", photoPath: null, notes: "", unitName: "粒", unitsPerBox: 50, precision: 0,
     safetyUnits: 30, reserveUnits: 20, dailyDose: 2, version: 1,
     consumeLocationId: null, predictionReason: null, ...partial,
   };
@@ -24,9 +25,9 @@ export function createDemoState(): DemoState {
   const now = new Date().toISOString();
   const spaces: SpaceSummary[] = [
     { id: ids.mine, name: "我的药品", role: "owner", isPrivate: true, currentLocationId: ids.school,
-      locations: [{ id: ids.home, name: "家里" }, { id: ids.school, name: "学校" }] },
+      locations: [{ id: ids.home, name: "家里", isPrimary: true, targetDays: null }, { id: ids.school, name: "学校", isPrimary: false, targetDays: 7 }] },
     { id: ids.mother, name: "妈妈的药品", role: "editor", isPrivate: true, currentLocationId: ids.motherHome,
-      locations: [{ id: ids.motherHome, name: "家里" }] },
+      locations: [{ id: ids.motherHome, name: "家里", isPrimary: true, targetDays: null }] },
   ];
   const myMedicines = [
     med({ id: "demo-med-a", name: "药品 A", specification: "每盒 50 粒", dailyDose: 2,
@@ -42,6 +43,9 @@ export function createDemoState(): DemoState {
       locations: [{ id: ids.motherHome, name: "家里", units: 43, daysLeft: 43 }] })], operations: [],
       members: [{ userId: "demo-user-mother", displayName: "妈妈", role: "owner" }, { userId: "demo-user-me", displayName: "我", role: "editor" }], invitations: [] },
   };
+  Object.values(dashboards).forEach((dashboard) => dashboard.medicines.forEach((medicine) => medicine.locations.forEach((location) => {
+    Object.assign(location, dashboard.space.locations.find((item) => item.id === location.id));
+  })));
   return { spaces, dashboards, changes: {} };
 }
 
@@ -70,10 +74,22 @@ export function applyDemoMutation(state: DemoState, spaceId: string, action: str
     return { ok: true, message: "所在地已更新，只影响之后的推算" };
   }
   if (action === "add_location") {
-    const location = { id: crypto.randomUUID(), name: String(payload.name) };
+    const isPrimary = payload.isPrimary === true || payload.isPrimary === "true";
+    if (isPrimary) dashboard.space.locations.forEach((item) => { item.isPrimary = false; item.targetDays = Number(payload.targetDays || 7); });
+    const location = { id: crypto.randomUUID(), name: String(payload.name), isPrimary, targetDays: isPrimary ? null : Number(payload.targetDays || 7) };
     dashboard.space.locations.push(location);
     dashboard.medicines.forEach((medicine) => medicine.locations.push({ ...location, units: 0, daysLeft: null }));
     return { ok: true, message: "存放地点已添加" };
+  }
+  if (action === "location_settings") {
+    const location = dashboard.space.locations.find((item) => item.id === payload.locationId);
+    if (!location) return { ok: false, message: "未找到地点" };
+    const isPrimary = payload.isPrimary === true || payload.isPrimary === "true";
+    if (isPrimary) dashboard.space.locations.forEach((item) => { item.isPrimary = item.id === location.id; item.targetDays = item.id === location.id ? null : item.targetDays || 7; });
+    else if (location.isPrimary) return { ok: false, message: "请直接把另一个地点设为主要地点" };
+    else location.targetDays = Number(payload.targetDays || 7);
+    dashboard.medicines.forEach((medicine) => medicine.locations.forEach((item) => Object.assign(item, dashboard.space.locations.find((spaceLocation) => spaceLocation.id === item.id))));
+    return { ok: true, message: "地点储备设置已更新" };
   }
   if (action === "invite") {
     if (dashboard.space.role !== "owner") return { ok: false, message: "只有空间主人可以邀请家人" };
@@ -84,20 +100,44 @@ export function applyDemoMutation(state: DemoState, spaceId: string, action: str
     const locationId = String(payload.locationId || dashboard.space.locations[0]?.id);
     const location = dashboard.space.locations.find((item) => item.id === locationId);
     const medicine = med({ id: crypto.randomUUID(), name: String(payload.name), specification: String(payload.specification ?? ""),
+      category: String(payload.category ?? ""), brand: String(payload.brand ?? ""), dosageForm: String(payload.dosageForm ?? ""),
+      packagingSpec: String(payload.packagingSpec ?? ""), origin: payload.origin === "domestic" || payload.origin === "imported" ? payload.origin : "",
+      notes: String(payload.notes ?? ""),
       unitName: String(payload.unitName || "粒"), unitsPerBox: Number(payload.unitsPerBox), dailyDose: Number(payload.dailyDose || 0),
       safetyUnits: Number(payload.safetyUnits || 0), reserveUnits: Number(payload.reserveUnits || 0),
       locations: dashboard.space.locations.map((item) => ({ id: item.id, name: item.name, units: item.id === locationId ? Number(payload.initialUnits || 0) : 0, daysLeft: null })) });
     updatePredictions(medicine);
     dashboard.medicines.push(medicine);
-    const op = operation("receive", medicine, `${location?.name ?? "存放地"}初始录入 ${payload.initialUnits || 0}${medicine.unitName}`);
-    dashboard.operations.unshift(op);
-    state.changes[op.id] = Number(payload.initialUnits) ? [{ medicineId: medicine.id, locationId, delta: Number(payload.initialUnits) }] : [];
-    return { ok: true, message: "药品已添加" };
+    if (Number(payload.initialUnits) > 0) {
+      const op = operation("receive", medicine, `${location?.name ?? "存放地"}初始录入 ${payload.initialUnits}${medicine.unitName}`);
+      dashboard.operations.unshift(op);
+      state.changes[op.id] = [{ medicineId: medicine.id, locationId, delta: Number(payload.initialUnits) }];
+    }
+    return { ok: true, message: "药品已添加", id: medicine.id };
   }
   const medicine = dashboard.medicines.find((item) => item.id === payload.medicineId);
   if (!medicine) return { ok: false, message: "未找到药品" };
   if (payload.expectedVersion != null && Number(payload.expectedVersion) !== medicine.version) {
     return { ok: false, message: "库存刚被家人修改，请刷新后再试" };
+  }
+  if (action === "update_medicine") {
+    medicine.name = String(payload.name || medicine.name);
+    medicine.specification = String(payload.specification ?? "");
+    medicine.category = String(payload.category ?? "");
+    medicine.brand = String(payload.brand ?? "");
+    medicine.dosageForm = String(payload.dosageForm ?? "");
+    medicine.packagingSpec = String(payload.packagingSpec ?? "");
+    medicine.origin = payload.origin === "domestic" || payload.origin === "imported" ? payload.origin : "";
+    medicine.notes = String(payload.notes ?? "");
+    medicine.unitName = String(payload.unitName || medicine.unitName);
+    medicine.unitsPerBox = Number(payload.unitsPerBox || medicine.unitsPerBox);
+    medicine.version += 1;
+    return { ok: true, message: "药品资料已更新", id: medicine.id };
+  }
+  if (action === "archive_medicine") {
+    if (dashboard.operations.some((item) => item.medicineId === medicine.id)) return { ok: false, message: "该药品已有库存或历史记录，不能删除" };
+    dashboard.medicines = dashboard.medicines.filter((item) => item.id !== medicine.id);
+    return { ok: true, message: "药品资料已停用", id: medicine.id };
   }
   if (action === "set_schedule") {
     medicine.dailyDose = Number(payload.dailyDose);
@@ -141,7 +181,7 @@ export function applyDemoMutation(state: DemoState, spaceId: string, action: str
 
 export function createDemoSpace(state: DemoState, name: string, locationName: string) {
   const patientId = crypto.randomUUID(); const locationId = crypto.randomUUID();
-  const space: SpaceSummary = { id: patientId, name, role: "owner", isPrivate: true, currentLocationId: locationId, locations: [{ id: locationId, name: locationName }] };
+  const space: SpaceSummary = { id: patientId, name, role: "owner", isPrivate: true, currentLocationId: locationId, locations: [{ id: locationId, name: locationName, isPrimary: true, targetDays: null }] };
   state.spaces.push(space);
   state.dashboards[patientId] = { space, medicines: [], operations: [], members: [{ userId: "demo-user-me", displayName: "我", role: "owner" }], invitations: [] };
   return patientId;

@@ -5,16 +5,29 @@ export type OperationKind = "receive" | "adjust" | "transfer" | "loss" | "undo";
 export interface LocationSummary {
   id: string;
   name: string;
+  isPrimary?: boolean;
+  targetDays?: number | null;
   units: number;
   confirmedAt?: string;
   daysLeft?: number | null;
   runOutDate?: string | null;
+  expiringUnits?: number;
+  requiredUnits?: number;
+  targetUnits?: number;
+  recommendedBoxes?: number;
 }
 
 export interface MedicineSummary {
   id: string;
   name: string;
   specification: string;
+  category: string;
+  brand: string;
+  dosageForm: string;
+  packagingSpec: string;
+  origin: "domestic" | "imported" | "";
+  photoPath?: string | null;
+  notes: string;
   unitName: string;
   unitsPerBox: number;
   precision: number;
@@ -34,7 +47,7 @@ export interface SpaceSummary {
   role: Role;
   isPrivate: boolean;
   currentLocationId?: string | null;
-  locations: Array<{ id: string; name: string }>;
+  locations: Array<{ id: string; name: string; isPrimary?: boolean; targetDays?: number | null }>;
 }
 
 export interface OperationSummary {
@@ -84,4 +97,4 @@ export interface QuantityInput {
   total: number;
 }
 
-export interface MutationResult { ok: boolean; message: string }
+export interface MutationResult { ok: boolean; message: string; id?: string }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { withBasePath } from "@/lib/site-path";
-import type { AppMode, DashboardData, MutationResult, PendingInvitation, SpaceSummary } from "@/lib/domain/types";
+import type { AppMode, DashboardData, MedicineSummary, MutationResult, PendingInvitation, SpaceSummary } from "@/lib/domain/types";
 import { applyDemoMutation, createDemoSpace, createDemoState, type DemoState, undoDemoOperation } from "./demo";
 
 const STORAGE_KEY = "family-medicine-demo-v2";
@@ -19,6 +19,7 @@ export function useInventoryApp(mode: AppMode) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<PendingInvitation[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [demo, setDemo] = useState<DemoState | null>(null);
   const mutationInFlight = useRef(false);
   const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -67,14 +68,65 @@ export function useInventoryApp(mode: AppMode) {
     if (mode === "demo" && demo) { setDashboard(demo.dashboards[spaceId]); return; }
     if (!supabase) return;
     setBusy(true); setError(null);
-    const { data, error: requestError } = await supabase.rpc("api_patient_dashboard", { p_patient_id: spaceId });
-    if (requestError) setError(requestError.message); else setDashboard(data as DashboardData);
+    const [{ data, error: requestError }, { data: details }, { data: expiryRows, error: expiryError }, { data: targetRows, error: targetError }] = await Promise.all([
+      supabase.rpc("api_patient_dashboard", { p_patient_id: spaceId }),
+      supabase.from("medicines").select("id,category,brand,dosage_form,packaging_spec,origin,photo_path,notes").eq("patient_id", spaceId).is("archived_at", null),
+      supabase.rpc("api_location_expiry", { p_patient_id: spaceId }),
+      supabase.rpc("api_secondary_location_targets", { p_patient_id: spaceId }),
+    ]);
+    if (requestError) setError(requestError.message);
+    else {
+      const next = data as DashboardData;
+      const detailMap = new Map((details ?? []).map((item) => [item.id, item]));
+      const expiryMap = new Map(((expiryRows ?? []) as Array<{ medicineId: string; locationId: string; units: number }>).map((item) => [`${item.medicineId}:${item.locationId}`, Number(item.units)]));
+      const targetMap = new Map(((targetRows ?? []) as Array<{ medicineId: string; locationId: string; requiredUnits: number; targetUnits: number; recommendedBoxes: number }>).map((item) => [`${item.medicineId}:${item.locationId}`, item]));
+      const locationMap = new Map(next.space.locations.map((location) => [location.id, location]));
+      next.medicines = next.medicines.map((medicine) => {
+        const item = detailMap.get(medicine.id);
+        return {
+          ...medicine,
+          category: item?.category ?? "",
+          brand: item?.brand ?? "",
+          dosageForm: item?.dosage_form ?? "",
+          packagingSpec: item?.packaging_spec ?? "",
+          origin: item?.origin === "domestic" || item?.origin === "imported" ? item.origin : "",
+          photoPath: item?.photo_path ?? null,
+          notes: item?.notes ?? "",
+          locations: medicine.locations.map((location) => {
+            const target = targetMap.get(`${medicine.id}:${location.id}`);
+            return {
+              ...location, ...locationMap.get(location.id),
+              ...(expiryError ? {} : { expiringUnits: expiryMap.get(`${medicine.id}:${location.id}`) ?? 0 }),
+              ...(targetError || !target ? {} : { requiredUnits: Number(target.requiredUnits), targetUnits: Number(target.targetUnits), recommendedBoxes: Number(target.recommendedBoxes) }),
+            };
+          }),
+        } satisfies MedicineSummary;
+      });
+      setDashboard(next);
+    }
     setBusy(false);
   }, [demo, mode, supabase]);
 
   useEffect(() => { if (selectedId) void loadDashboard(selectedId); }, [selectedId, loadDashboard]);
 
-  const selectSpace = (id: string) => { setSelectedId(id); if (mode === "demo" && demo) setDashboard(demo.dashboards[id]); };
+  useEffect(() => {
+    let cancelled = false;
+    const paths = dashboard?.medicines.map((item) => item.photoPath).filter((path): path is string => Boolean(path)) ?? [];
+    if (!supabase || paths.length === 0) { setPhotoUrls({}); return; }
+    supabase.storage.from("medicine-photos").createSignedUrls(paths, 3600).then(({ data }) => {
+      if (cancelled) return;
+      const next: Record<string, string> = {};
+      data?.forEach((item, index) => { if (item.signedUrl) next[paths[index]] = item.signedUrl; });
+      setPhotoUrls(next);
+    });
+    return () => { cancelled = true; };
+  }, [dashboard, supabase]);
+
+  const selectSpace = (id: string) => {
+    setSelectedId(id);
+    if (mode === "demo" && demo) setDashboard(demo.dashboards[id]);
+    else setDashboard(null);
+  };
 
   const mutate = async (action: string, payload: Record<string, unknown>): Promise<MutationResult> => {
     if (!selectedId && action !== "create_space") return { ok: false, message: "请先选择用药人" };
@@ -97,6 +149,7 @@ export function useInventoryApp(mode: AppMode) {
         loss: "api_stock_change", transfer: "api_stock_change", undo: "api_undo_operation",
         set_schedule: "api_set_schedule", set_location: "api_set_current_location",
         add_location: "api_add_location", invite: "api_invite_member", create_space: "api_create_patient",
+        update_medicine: "api_update_medicine", archive_medicine: "api_archive_medicine", location_settings: "api_update_location_settings",
       };
       const rpcName = rpcMap[action];
       if (!rpcName) return { ok: false, message: "不支持的操作" };
@@ -108,15 +161,45 @@ export function useInventoryApp(mode: AppMode) {
       const params = action === "undo" ? { p_operation_id: payload.operationId, p_idempotency_key: idempotencyKey }
         : action === "invite" ? { p_payload: { ...payload, patientId: selectedId }, p_idempotency_key: idempotencyKey }
         : { p_action: action, p_payload: action === "create_space" ? payload : { ...payload, patientId: selectedId }, p_idempotency_key: idempotencyKey };
-      if (["add_medicine", "set_schedule", "set_location", "add_location", "create_space"].includes(action)) delete (params as Record<string, unknown>).p_action;
-      const { error: requestError } = await supabase.rpc(rpcName, params);
+      if (["add_medicine", "set_schedule", "set_location", "add_location", "create_space", "update_medicine", "archive_medicine", "location_settings"].includes(action)) delete (params as Record<string, unknown>).p_action;
+      const { data, error: requestError } = await supabase.rpc(rpcName, params);
       if (requestError) { setError(requestError.message); return { ok: false, message: requestError.message }; }
       pendingRequest.current = null;
       await loadSpaces(); if (selectedId) await loadDashboard(selectedId);
-      return { ok: true, message: "已保存" };
+      return { ok: true, message: action === "archive_medicine" ? "药品资料已停用" : "已保存", id: typeof data === "string" ? data : undefined };
     } finally {
       mutationInFlight.current = false;
       setBusy(false);
+    }
+  };
+
+  const saveMedicinePhoto = async (medicineId: string, file: File | null, oldPath?: string | null): Promise<MutationResult> => {
+    if (!supabase || !selectedId) return { ok: false, message: "照片上传仅在已连接 Supabase 时可用" };
+    if (file && (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024)) {
+      return { ok: false, message: "请选择不超过 5MB 的 JPG、PNG 或 WebP 图片" };
+    }
+    if (mutationInFlight.current) return { ok: false, message: "操作正在保存，请稍候" };
+    mutationInFlight.current = true; setBusy(true); setError(null);
+    let newPath: string | null = null;
+    try {
+      if (file) {
+        const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+        newPath = `${selectedId}/${medicineId}/${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage.from("medicine-photos").upload(newPath, file, { contentType: file.type, upsert: false });
+        if (uploadError) return { ok: false, message: `照片上传失败：${uploadError.message}` };
+      }
+      const { error: requestError } = await supabase.rpc("api_set_medicine_photo", {
+        p_payload: { patientId: selectedId, medicineId, photoPath: newPath }, p_idempotency_key: crypto.randomUUID(),
+      });
+      if (requestError) {
+        if (newPath) await supabase.storage.from("medicine-photos").remove([newPath]);
+        return { ok: false, message: requestError.message };
+      }
+      if (oldPath && oldPath !== newPath) await supabase.storage.from("medicine-photos").remove([oldPath]);
+      await loadDashboard(selectedId);
+      return { ok: true, message: file ? "药盒照片已保存" : "药盒照片已删除" };
+    } finally {
+      mutationInFlight.current = false; setBusy(false);
     }
   };
 
@@ -147,5 +230,5 @@ export function useInventoryApp(mode: AppMode) {
   const signOut = async () => { pendingRequest.current = null; await supabase?.auth.signOut(); setSpaces([]); setDashboard(null); };
   const resetDemo = () => { const next = createDemoState(); saveDemo(next); setSpaces(next.spaces); selectSpace(next.spaces[0].id); };
 
-  return { mode, user, authChecked, spaces, selectedId, dashboard, pendingInvites, busy, error, selectSpace, mutate, answerInvite, signIn, signUp, signOut, resetDemo };
+  return { mode, user, authChecked, spaces, selectedId, dashboard, pendingInvites, photoUrls, busy, error, selectSpace, mutate, saveMedicinePhoto, answerInvite, signIn, signUp, signOut, resetDemo };
 }
