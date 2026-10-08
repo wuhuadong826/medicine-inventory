@@ -180,14 +180,16 @@ function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId,
   const [error, setError] = useState<string | null>(null);
   const [selectedMedicineId, setSelectedMedicineId] = useState(dashboard?.medicines[0]?.id ?? "");
   const [settingLocationId, setSettingLocationId] = useState(dashboard?.space.locations[0]?.id ?? "");
+  const [schedulePattern, setSchedulePattern] = useState("daily");
   const selectedMedicine = kind === "quick-receive" ? dashboard?.medicines.find((item) => item.id === selectedMedicineId) ?? null : medicine;
   const settingLocation = dashboard?.space.locations.find((item) => item.id === settingLocationId);
   const title: Record<ActionDialogKind, string> = { add: "手动新增药品和库存", receive: "新买的药放进药箱", "quick-receive": "从药品库选择入库", adjust: "修改现在的数量", transfer: "把药带到别处", loss: "记录减少的药", schedule: "吃药计划与药品设置", location: "我现在在哪里", "add-location": "添加存放地点", "location-settings": "主要地点与备用储备", invite: "邀请家人共同管理", "create-space": "新建用药人" };
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null);
-    const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const form = new FormData(event.currentTarget);
+    const values = Object.fromEntries(form.entries());
     try {
-      let action = kind === "quick-receive" ? "receive" : kind.replace("-", "_"); const payload: Record<string, unknown> = { ...values, medicineId: selectedMedicine?.id, expectedVersion: selectedMedicine?.version };
+      const action = kind === "quick-receive" ? "receive" : kind === "location" ? "set_location" : kind === "schedule" ? "set_schedule" : kind.replace("-", "_"); const payload: Record<string, unknown> = { ...values, medicineId: selectedMedicine?.id, expectedVersion: selectedMedicine?.version };
       if (["adjust", "loss", "transfer"].includes(kind) && selectedMedicine) {
         payload.units = parseFriendlyQuantity(String(values.quantity), selectedMedicine.unitsPerBox, selectedMedicine.precision).total;
       }
@@ -196,7 +198,11 @@ function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId,
         const perBox = Number(values.unitsPerBox);
         payload.initialUnits = quantityFromParts(values.boxes, values.loose, perBox, Number(values.precision || 0));
       }
-      if (kind === "schedule") payload.dailyDose = Number(values.morning || 0) + Number(values.noon || 0) + Number(values.evening || 0) + Number(values.bedtime || 0);
+      if (kind === "schedule") {
+        payload.dailyDose = Number(values.morning || 0) + Number(values.noon || 0) + Number(values.evening || 0) + Number(values.bedtime || 0);
+        payload.daysOfWeek = form.getAll("daysOfWeek").map(Number);
+        if (values.pattern === "weekdays" && !(payload.daysOfWeek as number[]).length) throw new Error("请至少选择一个服药日");
+      }
       if (kind === "location") payload.effectiveFrom = new Date(String(values.effectiveFrom)).toISOString();
       if (kind === "adjust" && selectedMedicine) {
         const loc = selectedMedicine.locations.find((x) => x.id === values.locationId);
@@ -239,7 +245,8 @@ function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId,
         <div className="two-fields"><Field label={`每盒有多少${medicine.unitName}`} hint="修改后只影响新的入库，历史换算不会变化"><input name="unitsPerBox" type="number" min="0.001" step="any" defaultValue={medicine.unitsPerBox} required /></Field><Field label="低于多少提醒"><input name="safetyUnits" type="number" min="0" step="any" defaultValue={medicine.safetyUnits} /></Field></div>
         <Field label="家中最低保留数量"><input name="reserveUnits" type="number" min="0" step="any" defaultValue={medicine.reserveUnits} /></Field>
         <div className="dose-fields"><Field label="早"><input name="morning" type="number" min="0" step="any" defaultValue={medicine.dailyDose || 0} /></Field><Field label="中"><input name="noon" type="number" min="0" step="any" defaultValue="0" /></Field><Field label="晚"><input name="evening" type="number" min="0" step="any" defaultValue="0" /></Field><Field label="睡前"><input name="bedtime" type="number" min="0" step="any" defaultValue="0" /></Field></div>
-        <div className="two-fields"><Field label="从哪天开始" hint="已有计划默认从明天调整，避免改变今天早些时候的推算"><input name="effectiveFrom" type="date" required defaultValue={isoDateOffset(1)} /></Field><Field label="用药规律"><select name="pattern"><option value="daily">每天</option><option value="alternate">隔天</option></select></Field></div>
+        <div className="two-fields"><Field label="从哪天开始" hint="已有计划默认从明天调整，避免改变今天早些时候的推算"><input name="effectiveFrom" type="date" required defaultValue={isoDateOffset(1)} /></Field><Field label="用药规律"><select name="pattern" value={schedulePattern} onChange={(event) => setSchedulePattern(event.target.value)}><option value="daily">每天</option><option value="alternate">隔天</option><option value="weekdays">指定星期</option></select></Field></div>
+        {schedulePattern === "weekdays" && <Field label="选择服药日"><div className="weekday-picker">{[[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[7,"日"]].map(([day, label]) => <label key={day} className="weekday-option"><input type="checkbox" name="daysOfWeek" value={day} /><span>周{label}</span></label>)}</div></Field>}
         <Field label="从哪里消耗"><select name="locationId" defaultValue={medicine.consumeLocationId ?? ""}><option value="">跟随我当时所在地点</option>{locations.map((x) => <option key={x.id} value={x.id}>固定从{x.name}</option>)}</select></Field>
       </>}
       {kind === "location" && <><Field label="从现在起，我在哪里"><LocationSelect name="locationId" locations={locations} /></Field><Field label="开始时间"><input name="effectiveFrom" type="datetime-local" defaultValue={localDateTime()} required /></Field><p className="form-help">这只影响之后的计划消耗，之前的记录不会改变。</p></>}
