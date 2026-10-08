@@ -1,0 +1,73 @@
+name: 部署家庭药箱到 GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      CONFIGURED_BASE_PATH: ${{ vars.NEXT_PUBLIC_BASE_PATH }}
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v4
+
+      - name: 计算 GitHub Pages 项目路径
+        shell: bash
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          if [ -n "$CONFIGURED_BASE_PATH" ]; then
+            BASE_PATH="$CONFIGURED_BASE_PATH"
+          elif [[ "$REPO_NAME" == *.github.io ]]; then
+            BASE_PATH=""
+          else
+            BASE_PATH="/$REPO_NAME"
+          fi
+          echo "NEXT_PUBLIC_BASE_PATH=$BASE_PATH" >> "$GITHUB_ENV"
+
+      - name: 检查 Supabase 构建变量
+        shell: bash
+        run: |
+          if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] || [ -z "$NEXT_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "请先在仓库 Variables 中配置 NEXT_PUBLIC_SUPABASE_URL 和 NEXT_PUBLIC_SUPABASE_ANON_KEY。"
+            exit 1
+          fi
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 静态导出
+        run: npm run build
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传静态站点
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+      - name: 发布 Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
