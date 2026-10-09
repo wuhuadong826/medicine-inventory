@@ -115,6 +115,19 @@ export function applyDemoMutation(state: DemoState, spaceId: string, action: str
     }
     return { ok: true, message: "药品已添加", id: medicine.id };
   }
+  if (action === "set_day_locations" || action === "set_dose_locations") {
+    return { ok: true, message: "演示模式已记录本次日期调整" };
+  }
+  if (action === "set_schedule_batch") {
+    const items = Array.isArray(payload.items) ? payload.items as Array<{ medicineId: string; expectedVersion: number }> : [];
+    const delta = Number(payload.delta);
+    for (const item of items) {
+      const target = dashboard.medicines.find((medicine) => medicine.id === item.medicineId);
+      if (!target || target.version !== Number(item.expectedVersion) || target.dailyDose + delta < 0) return { ok: false, message: "部分药品已变化，批量操作未保存" };
+    }
+    items.forEach((item) => { const target=dashboard.medicines.find((medicine)=>medicine.id===item.medicineId)!; target.dailyDose+=delta; updatePredictions(target); });
+    return { ok: true, message: "批量计划已更新" };
+  }
   const medicine = dashboard.medicines.find((item) => item.id === payload.medicineId);
   if (!medicine) return { ok: false, message: "未找到药品" };
   if (payload.expectedVersion != null && Number(payload.expectedVersion) !== medicine.version) {

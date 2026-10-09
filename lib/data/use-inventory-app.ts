@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { withBasePath } from "@/lib/site-path";
-import type { AppMode, DashboardData, MedicineSummary, MutationResult, PendingInvitation, SpaceSummary } from "@/lib/domain/types";
+import type { AppMode, DashboardData, DayPlanData, LocationCalendarDay, MedicineSummary, MutationResult, PendingInvitation, ScheduleOverviewData, SchedulePlanSummary, SpaceSummary } from "@/lib/domain/types";
 import { applyDemoMutation, createDemoSpace, createDemoState, type DemoState, undoDemoOperation } from "./demo";
 
 const STORAGE_KEY = "family-medicine-demo-v2";
@@ -20,6 +20,8 @@ export function useInventoryApp(mode: AppMode) {
   const [error, setError] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<PendingInvitation[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [scheduleOverview, setScheduleOverview] = useState<ScheduleOverviewData | null>(null);
+  const [calendarDays, setCalendarDays] = useState<LocationCalendarDay[]>([]);
   const [demo, setDemo] = useState<DemoState | null>(null);
   const mutationInFlight = useRef(false);
   const pendingRequest = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -107,7 +109,78 @@ export function useInventoryApp(mode: AppMode) {
     setBusy(false);
   }, [demo, mode, supabase]);
 
-  useEffect(() => { if (selectedId) void loadDashboard(selectedId); }, [selectedId, loadDashboard]);
+  const loadScheduleOverview = useCallback(async (spaceId: string) => {
+    if (mode === "demo" && demo) {
+      const localDate = localIsoDate();
+      const plans: SchedulePlanSummary[] = (demo.dashboards[spaceId]?.medicines ?? []).map((medicine) => ({
+        medicineId: medicine.id, medicineName: medicine.name, unitName: medicine.unitName, version: medicine.version,
+        scheduleId: medicine.dailyDose > 0 ? `demo-schedule-${medicine.id}` : null, effectiveFrom: medicine.dailyDose > 0 ? localDate : null,
+        effectiveTo: null, pattern: "daily", daysOfWeek: [], morning: medicine.dailyDose, noon: 0, evening: 0, bedtime: 0,
+        locationId: medicine.consumeLocationId ?? null, paused: false, isDoseDay: medicine.dailyDose > 0,
+      }));
+      setScheduleOverview({ timezone: "Asia/Shanghai", localDate, plans });
+      return;
+    }
+    if (!supabase) return;
+    const { data, error: requestError } = await supabase.rpc("api_schedule_overview", { p_patient_id: spaceId, p_date: null });
+    if (requestError) { setError(requestError.message); return; }
+    const result = data as ScheduleOverviewData;
+    result.plans = (result.plans ?? []).map((plan) => ({ ...plan,
+      version: Number(plan.version), morning: Number(plan.morning), noon: Number(plan.noon),
+      evening: Number(plan.evening), bedtime: Number(plan.bedtime), daysOfWeek: (plan.daysOfWeek ?? []).map(Number),
+      upcoming: plan.upcoming ? { ...plan.upcoming, morning:Number(plan.upcoming.morning),noon:Number(plan.upcoming.noon),evening:Number(plan.upcoming.evening),bedtime:Number(plan.upcoming.bedtime),daysOfWeek:(plan.upcoming.daysOfWeek??[]).map(Number) } : null,
+    }));
+    setScheduleOverview(result);
+  }, [demo, mode, supabase]);
+
+  const loadLocationCalendar = useCallback(async (spaceId: string, monthStart: string) => {
+    if (mode === "demo" && demo) {
+      const dashboardForSpace = demo.dashboards[spaceId];
+      const [year, month] = monthStart.split("-").map(Number);
+      const count = new Date(year, month, 0).getDate();
+      const location = dashboardForSpace?.space.locations.find((item) => item.id === dashboardForSpace.space.currentLocationId) ?? null;
+      const days = Array.from({ length: count }, (_, index): LocationCalendarDay => ({
+        date: `${year}-${String(month).padStart(2,"0")}-${String(index + 1).padStart(2,"0")}`,
+        locationId: location?.id ?? null, locationName: location?.name ?? null, isOverride: false,
+        wasCorrected: false, isMixed: false, hasDoseOverride: false,
+      }));
+      setCalendarDays(days); return days;
+    }
+    if (!supabase) return [];
+    const { data, error: requestError } = await supabase.rpc("api_location_calendar", { p_patient_id: spaceId, p_month_start: monthStart });
+    if (requestError) { setError(requestError.message); return []; }
+    const days = (data ?? []) as LocationCalendarDay[]; setCalendarDays(days); return days;
+  }, [demo, mode, supabase]);
+
+  const loadDayPlan = useCallback(async (spaceId: string, date: string): Promise<DayPlanData | null> => {
+    if (mode === "demo" && demo) {
+      const current = demo.dashboards[spaceId];
+      return { date, timezone: "Asia/Shanghai", doses: (current?.medicines ?? []).filter((medicine) => medicine.dailyDose > 0).map((medicine) => ({
+        medicineId: medicine.id, medicineName: medicine.name, unitName: medicine.unitName, slot: "morning",
+        amount: medicine.dailyDose, normalLocationId: medicine.consumeLocationId ?? current.space.currentLocationId ?? null,
+        resolvedLocationId: medicine.consumeLocationId ?? current.space.currentLocationId ?? null,
+      })) };
+    }
+    if (!supabase) return null;
+    const { data, error: requestError } = await supabase.rpc("api_day_plan", { p_patient_id: spaceId, p_date: date });
+    if (requestError) { setError(requestError.message); return null; }
+    const result = data as DayPlanData;
+    result.doses = (result.doses ?? []).map((dose) => ({ ...dose, amount: Number(dose.amount) }));
+    return result;
+  }, [demo, mode, supabase]);
+
+  useEffect(() => {
+    setScheduleOverview(null); setCalendarDays([]);
+    if (selectedId) { void loadDashboard(selectedId); void loadScheduleOverview(selectedId); }
+  }, [selectedId, loadDashboard, loadScheduleOverview]);
+
+  useEffect(() => {
+    if (!selectedId || mode !== "supabase") return;
+    const refresh = () => { if (document.visibilityState === "visible") { void loadDashboard(selectedId); void loadScheduleOverview(selectedId); } };
+    const timer = window.setInterval(refresh, 300_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [selectedId, mode, loadDashboard, loadScheduleOverview]);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,8 +196,10 @@ export function useInventoryApp(mode: AppMode) {
   }, [dashboard, supabase]);
 
   const selectSpace = (id: string) => {
+    if (!spaces.some((space) => space.id === id)) { setError("未找到这个用药空间，已保留当前空间"); return; }
+    if (id === selectedId) return;
     setSelectedId(id);
-    if (mode === "demo" && demo) setDashboard(demo.dashboards[id]);
+    if (mode === "demo" && demo && demo.dashboards[id]) setDashboard(demo.dashboards[id]);
     else setDashboard(null);
   };
 
@@ -148,6 +223,8 @@ export function useInventoryApp(mode: AppMode) {
         add_medicine: "api_add_medicine", adjust: "api_stock_change", receive: "api_stock_change",
         loss: "api_stock_change", transfer: "api_stock_change", undo: "api_undo_operation",
         set_schedule: "api_set_schedule", set_location: "api_set_current_location",
+        set_schedule_batch: "api_set_schedule_batch", set_day_locations: "api_set_day_location_overrides",
+        set_dose_locations: "api_set_dose_location_overrides",
         add_location: "api_add_location", invite: "api_invite_member", create_space: "api_create_patient",
         update_medicine: "api_update_medicine", archive_medicine: "api_archive_medicine", location_settings: "api_update_location_settings",
       };
@@ -161,11 +238,11 @@ export function useInventoryApp(mode: AppMode) {
       const params = action === "undo" ? { p_operation_id: payload.operationId, p_idempotency_key: idempotencyKey }
         : action === "invite" ? { p_payload: { ...payload, patientId: selectedId }, p_idempotency_key: idempotencyKey }
         : { p_action: action, p_payload: action === "create_space" ? payload : { ...payload, patientId: selectedId }, p_idempotency_key: idempotencyKey };
-      if (["add_medicine", "set_schedule", "set_location", "add_location", "create_space", "update_medicine", "archive_medicine", "location_settings"].includes(action)) delete (params as Record<string, unknown>).p_action;
+      if (["add_medicine", "set_schedule", "set_location", "set_schedule_batch", "set_day_locations", "set_dose_locations", "add_location", "create_space", "update_medicine", "archive_medicine", "location_settings"].includes(action)) delete (params as Record<string, unknown>).p_action;
       const { data, error: requestError } = await supabase.rpc(rpcName, params);
       if (requestError) { setError(requestError.message); return { ok: false, message: requestError.message }; }
       pendingRequest.current = null;
-      await loadSpaces(); if (selectedId) await loadDashboard(selectedId);
+      await loadSpaces(); if (selectedId) await Promise.all([loadDashboard(selectedId),loadScheduleOverview(selectedId)]);
       return { ok: true, message: action === "archive_medicine" ? "药品资料已停用" : "已保存", id: typeof data === "string" ? data : undefined };
     } finally {
       mutationInFlight.current = false;
@@ -227,8 +304,13 @@ export function useInventoryApp(mode: AppMode) {
     const { error: authError } = await supabase!.auth.signUp({ email, password, options: { data: { display_name: name }, emailRedirectTo: `${location.origin}${withBasePath("/auth/callback/")}` } });
     return authError?.message ?? null;
   };
-  const signOut = async () => { pendingRequest.current = null; await supabase?.auth.signOut(); setSpaces([]); setDashboard(null); };
+  const signOut = async () => { pendingRequest.current = null; await supabase?.auth.signOut(); setSpaces([]); setDashboard(null); setScheduleOverview(null); setCalendarDays([]); };
   const resetDemo = () => { const next = createDemoState(); saveDemo(next); setSpaces(next.spaces); selectSpace(next.spaces[0].id); };
 
-  return { mode, user, authChecked, spaces, selectedId, dashboard, pendingInvites, photoUrls, busy, error, selectSpace, mutate, saveMedicinePhoto, answerInvite, signIn, signUp, signOut, resetDemo };
+  return { mode, user, authChecked, spaces, selectedId, dashboard, scheduleOverview, calendarDays, pendingInvites, photoUrls, busy, error, selectSpace, mutate, loadScheduleOverview, loadLocationCalendar, loadDayPlan, saveMedicinePhoto, answerInvite, signIn, signUp, signOut, resetDemo };
+}
+
+function localIsoDate() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
 }
