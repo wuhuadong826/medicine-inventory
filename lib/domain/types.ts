@@ -91,6 +91,76 @@ export interface DashboardData {
   invitations: InvitationSummary[];
 }
 
+export type DoseSlot = "morning" | "noon" | "evening" | "bedtime";
+export type SchedulePattern = "daily" | "alternate" | "weekdays";
+
+export interface SchedulePlanSummary {
+  medicineId: string;
+  medicineName: string;
+  unitName: string;
+  version: number;
+  scheduleId: string | null;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  pattern: SchedulePattern;
+  daysOfWeek: number[];
+  morning: number;
+  noon: number;
+  evening: number;
+  bedtime: number;
+  locationId: string | null;
+  paused: boolean;
+  isDoseDay: boolean;
+  upcoming?: {
+    scheduleId: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+    pattern: SchedulePattern;
+    daysOfWeek: number[];
+    morning: number;
+    noon: number;
+    evening: number;
+    bedtime: number;
+    locationId: string | null;
+    paused: boolean;
+  } | null;
+}
+
+export interface ScheduleOverviewData {
+  timezone: string;
+  localDate: string;
+  plans: SchedulePlanSummary[];
+}
+
+export interface LocationCalendarDay {
+  date: string;
+  locationId: string | null;
+  locationName: string | null;
+  isOverride: boolean;
+  wasCorrected: boolean;
+  isMixed: boolean;
+  hasDoseOverride: boolean;
+  correctedAt?: string | null;
+  correctedBy?: string | null;
+  previousLocationName?: string | null;
+}
+
+export interface DayDoseItem {
+  medicineId: string;
+  medicineName: string;
+  unitName: string;
+  slot: DoseSlot;
+  amount: number;
+  normalLocationId: string | null;
+  resolvedLocationId: string | null;
+}
+
+export interface DayPlanData {
+  date: string;
+  timezone: string;
+  doses: DayDoseItem[];
+}
+
 export interface QuantityInput {
   boxes: number;
   loose: number;
