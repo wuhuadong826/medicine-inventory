@@ -46,7 +46,8 @@ export function SchedulePanel({ dashboard, overview, busy, mutate, reload, editM
 
   return <section className="schedule-module">
     <div className="section-title"><div><h2>用药计划</h2><p>这里只记录已经确定的方案，不提供或改变医疗建议。</p></div>{dashboard.space.role !== "viewer" && <button className="primary-button" onClick={() => { setShowBatch(true); setPreview(false); }}><Layers3 size={18} />批量调整</button>}</div>
-    <div className="schedule-day-note"><CalendarClock size={20} /><div><strong>{overview?.localDate ?? "今天"} 的安排</strong><small>按 {overview?.timezone ?? "用药人时区"} 的当地零点切换统计日；后台按早、中、晚、睡前的固定时段推算，刷新或跨设备查看不会重复扣减。</small></div></div>
+    <div className="schedule-day-note"><CalendarClock size={20} /><div><strong>{overview?.localDate ?? "今天"} 当天实际生效的安排</strong><small>当天展示、库存扣减和所在地归属都按这一天有效的计划版本计算。未来计划只会从标注的生效日期开始使用。</small></div></div>
+    {plans.some((plan)=>plan.upcoming)&&<p className="schedule-version-note">下方橙色内容是尚未生效的未来变更；它与今天剂量不同属于正常的计划版本切换，并非早晚剂量颠倒。</p>}
     <div className="schedule-groups">{slots.map((item) => {
       const doses = plans.filter((plan) => plan.scheduleId && plan.isDoseDay && !plan.paused && Number(plan[item.key]) > 0);
       return <article className="schedule-group" key={item.key}><header><h3>{item.label}</h3><span>{doses.length} 种药</span></header>
@@ -57,7 +58,7 @@ export function SchedulePanel({ dashboard, overview, busy, mutate, reload, editM
     <div className="plan-list plain-card"><div className="section-title"><div><h2>长期计划</h2><p>修改会从指定日期建立新版本，不覆盖已经确认的历史日期。</p></div></div>
       {plans.map((plan) => {
         const medicine = dashboard.medicines.find((item) => item.id===plan.medicineId);
-        return <div className="plan-row" key={plan.medicineId}><label className="plan-check">{dashboard.space.role !== "viewer" && <input type="checkbox" checked={selected.includes(plan.medicineId)} onChange={() => toggle(plan.medicineId)} />}<span><strong>{plan.medicineName}</strong><small>{plan.scheduleId ? `${patternLabel(plan)} · ${doseSummary(plan)}` : "尚未设置当前计划"}</small>{plan.upcoming&&<small className="upcoming-plan">{plan.upcoming.effectiveFrom} 起：{patternLabel(plan.upcoming)} · {doseSummary({...plan,...plan.upcoming})}</small>}</span></label>{dashboard.space.role !== "viewer" && medicine && <button className="quiet-button" onClick={() => editMedicine(medicine)}>{plan.scheduleId||plan.upcoming ? <Edit3 size={16}/> : <Plus size={16}/>} {plan.scheduleId||plan.upcoming ? "调整" : "创建"}</button>}</div>;
+        return <div className="plan-row" key={plan.medicineId}><label className="plan-check">{dashboard.space.role !== "viewer" && <input type="checkbox" checked={selected.includes(plan.medicineId)} onChange={() => toggle(plan.medicineId)} />}<span><strong>{plan.medicineName}</strong><small>{plan.scheduleId ? `${overview?.localDate ?? "今天"} 正在生效：${patternLabel(plan)} · ${doseSummary(plan)}` : `${overview?.localDate ?? "今天"} 尚无生效计划`}</small>{plan.upcoming&&<small className="upcoming-plan">未来变更 · {plan.upcoming.effectiveFrom} 起生效：{patternLabel(plan.upcoming)} · {doseSummary({...plan,...plan.upcoming})}</small>}</span></label>{dashboard.space.role !== "viewer" && medicine && <button className="quiet-button" onClick={() => editMedicine(medicine)}>{plan.scheduleId||plan.upcoming ? <Edit3 size={16}/> : <Plus size={16}/>} {plan.scheduleId||plan.upcoming ? "调整" : "创建"}</button>}</div>;
       })}
     </div>
 
