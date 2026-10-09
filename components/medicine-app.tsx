@@ -3,12 +3,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   AlertTriangle, ArrowLeftRight, Boxes, CheckCircle2, ChevronDown, ClipboardCheck,
-  History, Home, LogOut, MapPin, PackagePlus, Plus, RotateCcw, Settings2, ShieldCheck,
+  CalendarDays, History, Home, LogOut, MapPin, PackagePlus, Pill, Plus, RotateCcw, Settings2, ShieldCheck,
   Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
-import type { AppMode, MedicineSummary, MutationResult } from "@/lib/domain/types";
+import type { AppMode, MedicineSummary, MutationResult, SchedulePattern, SchedulePlanSummary } from "@/lib/domain/types";
 import { formatQuantity, parseFriendlyQuantity } from "@/lib/domain/quantity";
 import { useInventoryApp } from "@/lib/data/use-inventory-app";
+import { SchedulePanel } from "@/components/schedule-panel";
+import { LocationCalendarPanel } from "@/components/location-calendar-panel";
 
 type ActionDialogKind = "add" | "receive" | "quick-receive" | "adjust" | "transfer" | "loss" | "schedule" | "location" | "add-location" | "location-settings" | "invite" | "create-space";
 type LibraryDialogKind = "library-add" | "library-edit";
@@ -16,7 +18,7 @@ type DialogKind = ActionDialogKind | LibraryDialogKind | null;
 
 export function MedicineApp({ mode }: { mode: AppMode }) {
   const app = useInventoryApp(mode);
-  const [tab, setTab] = useState<"overview" | "library" | "history" | "family">("overview");
+  const [tab, setTab] = useState<"overview" | "schedule" | "calendar" | "library" | "history" | "family">("overview");
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [activeMedicine, setActiveMedicine] = useState<MedicineSummary | null>(null);
   const [activeLocationId, setActiveLocationId] = useState<string | null>(null);
@@ -98,6 +100,8 @@ export function MedicineApp({ mode }: { mode: AppMode }) {
 
             <nav className="tabs" aria-label="主要功能">
               <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><Home size={19} />药品</button>
+              <button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}><Pill size={19} />用药计划</button>
+              <button className={tab === "calendar" ? "active" : ""} onClick={() => setTab("calendar")}><CalendarDays size={19} />所在地日历</button>
               <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Boxes size={19} />药品库</button>
               <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}><History size={19} />最近操作</button>
               <button className={tab === "family" ? "active" : ""} onClick={() => setTab("family")}><UsersRound size={19} />家人管理</button>
@@ -105,12 +109,18 @@ export function MedicineApp({ mode }: { mode: AppMode }) {
 
             {tab === "overview" && <>
               {attention.length > 0 && <section className="attention"><div><AlertTriangle size={23} /><strong>有 {attention.length} 种药需要留意</strong></div><p>可能库存不多或接近有效期，请打开药品卡片查看。</p></section>}
-              <div className="section-title inventory-title"><div><h2>药品库存</h2><p>选择地点后，数量和提醒都会按该地点重新计算。</p></div><div className="section-actions"><label className="compact-select"><MapPin size={17} /><select aria-label="查看地点" value={inventoryLocationId} onChange={(event) => setInventoryLocationId(event.target.value)}><option value="all">全部地点</option>{dashboard.space.locations.map((location) => <option key={location.id} value={location.id}>{location.name}{location.isPrimary ? "（主要）" : "（备用）"}</option>)}</select></label>{dashboard.space.role !== "viewer" && <><button className="quiet-button" onClick={() => open("add", undefined, inventoryLocationId === "all" ? null : inventoryLocationId)}><Plus size={18} />手动新增</button><button className="primary-button" onClick={() => open("quick-receive", undefined, inventoryLocationId === "all" ? null : inventoryLocationId)}><PackagePlus size={19} />从药品库入库</button></>}</div></div>
+              <div className="section-title inventory-title"><div><h2>药品库存</h2><p>这里选择的是正在管理的库存地点，与“当前所在地”和主要/备用设置互不改变。</p></div><div className="section-actions">{dashboard.space.role !== "viewer" && <><button className="quiet-button" onClick={() => open("add", undefined, inventoryLocationId === "all" ? null : inventoryLocationId)}><Plus size={18} />手动新增</button><button className="primary-button" onClick={() => open("quick-receive", undefined, inventoryLocationId === "all" ? null : inventoryLocationId)}><PackagePlus size={19} />从药品库入库</button></>}</div></div>
+              <div className="inventory-locations"><button className={inventoryLocationId==="all"?"active":""} onClick={()=>setInventoryLocationId("all")}><Boxes/><span><strong>全部地点</strong><small>汇总查看</small></span></button>{dashboard.space.locations.map((location)=>{const medicineCount=dashboard.medicines.filter((medicine)=>(medicine.locations.find((item)=>item.id===location.id)?.units??0)>0).length;return <button key={location.id} className={inventoryLocationId===location.id?"active":""} onClick={()=>setInventoryLocationId(location.id)}><MapPin/><span><strong>{location.name}</strong><small>{location.isPrimary?"主要地点":"备用地点"} · {medicineCount} 种有库存</small></span>{dashboard.space.currentLocationId===location.id&&<em>当前所在地</em>}</button>;})}</div>
+              {inventoryLocationId!=="all"&&<p className="managed-location-note"><MapPin size={17}/>正在管理 <strong>{dashboard.space.locations.find((item)=>item.id===inventoryLocationId)?.name}</strong> 的库存；下面的入库和修改数量会默认作用于这里。</p>}
               <div className="medicine-grid">
                 {visibleMedicines.map((medicine) => <MedicineCard key={medicine.id} medicine={medicine} canEdit={dashboard.space.role !== "viewer"} open={(kind) => open(kind, dashboard.medicines.find((item) => item.id === medicine.id) ?? medicine, inventoryLocationId === "all" ? null : inventoryLocationId)} />)}
               </div>
               {visibleMedicines.length === 0 && <EmptyState title={inventoryLocationId === "all" ? "还没有药品" : "这个地点暂时没有库存"} text={inventoryLocationId === "all" ? "可以先登记常用药品，再按实际地点入库。" : "仍然可以切换到这里；入库或调拨后会显示药品。"} action={dashboard.space.role === "viewer" ? undefined : () => open(inventoryLocationId === "all" ? "library-add" : "quick-receive", undefined, inventoryLocationId === "all" ? null : inventoryLocationId)} actionLabel={inventoryLocationId === "all" ? "登记药品" : "从药品库入库"} />}
             </>}
+
+            {tab === "schedule" && <SchedulePanel dashboard={dashboard} overview={app.scheduleOverview} busy={app.busy} mutate={app.mutate} reload={async()=>{if(app.selectedId)await app.loadScheduleOverview(app.selectedId);}} editMedicine={(medicine)=>open("schedule",medicine)} notify={finish} />}
+
+            {tab === "calendar" && app.selectedId && <LocationCalendarPanel dashboard={dashboard} spaceId={app.selectedId} localDate={app.scheduleOverview?.localDate} days={app.calendarDays} busy={app.busy} loadMonth={app.loadLocationCalendar} loadDay={app.loadDayPlan} mutate={app.mutate} notify={finish} />}
 
             {tab === "library" && <section className="plain-card library-panel">
               <div className="section-title"><div><h2>空间共用药品库</h2><p>药品资料由当前空间成员共同复用；登记资料不代表已有库存。</p></div>{dashboard.space.role !== "viewer" && <button className="primary-button" onClick={() => open("library-add")}><Plus size={19} />登记药品</button>}</div>
@@ -136,10 +146,10 @@ export function MedicineApp({ mode }: { mode: AppMode }) {
         </section>
       </div>
 
-      <nav className="mobile-nav"><button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><Home />库存</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Boxes />药品库</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}><History />记录</button><button className={tab === "family" ? "active" : ""} onClick={() => setTab("family")}><UsersRound />家人</button></nav>
+      <nav className="mobile-nav"><button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><Home />库存</button><button className={tab === "schedule" ? "active" : ""} onClick={() => setTab("schedule")}><Pill />计划</button><button className={tab === "calendar" ? "active" : ""} onClick={() => setTab("calendar")}><CalendarDays />日历</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Boxes />药品库</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}><History />记录</button><button className={tab === "family" ? "active" : ""} onClick={() => setTab("family")}><UsersRound />家人</button></nav>
       {dialog && (dialog === "library-add" || dialog === "library-edit"
         ? <MedicineLibraryDialog kind={dialog} medicine={activeMedicine} dashboard={dashboard} mode={mode} photoUrl={activeMedicine?.photoPath ? app.photoUrls[activeMedicine.photoPath] : undefined} busy={app.busy} close={() => setDialog(null)} mutate={app.mutate} savePhoto={app.saveMedicinePhoto} finish={finish} />
-        : <ActionDialog kind={dialog} medicine={activeMedicine} dashboard={dashboard} photoUrls={app.photoUrls} defaultLocationId={activeLocationId} busy={app.busy} close={() => setDialog(null)} submit={async (action, payload) => finish(await app.mutate(action, payload))} />)}
+        : <ActionDialog kind={dialog} medicine={activeMedicine} schedulePlan={activeMedicine ? app.scheduleOverview?.plans.find((plan)=>plan.medicineId===activeMedicine.id) : undefined} localDate={app.scheduleOverview?.localDate} dashboard={dashboard} photoUrls={app.photoUrls} defaultLocationId={activeLocationId} busy={app.busy} close={() => setDialog(null)} submit={async (action, payload) => finish(await app.mutate(action, payload))} />)}
       {toast && <div className="toast"><CheckCircle2 size={20} />{toast}</div>}
       {app.busy && <div className="busy-line" />}
     </main>
@@ -176,13 +186,16 @@ function LibraryCard({ medicine, photoUrl, canEdit, open }: { medicine: Medicine
   </article>;
 }
 
-function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId, busy, close, submit }: { kind: ActionDialogKind; medicine: MedicineSummary | null; dashboard: ReturnType<typeof useInventoryApp>["dashboard"]; photoUrls: Record<string,string>; defaultLocationId: string | null; busy: boolean; close: () => void; submit: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
+function ActionDialog({ kind, medicine, schedulePlan, localDate, dashboard, photoUrls, defaultLocationId, busy, close, submit }: { kind: ActionDialogKind; medicine: MedicineSummary | null; schedulePlan?: SchedulePlanSummary; localDate?: string; dashboard: ReturnType<typeof useInventoryApp>["dashboard"]; photoUrls: Record<string,string>; defaultLocationId: string | null; busy: boolean; close: () => void; submit: (action: string, payload: Record<string, unknown>) => Promise<void> }) {
+  const planForForm = schedulePlan?.upcoming ?? schedulePlan;
   const [error, setError] = useState<string | null>(null);
   const [selectedMedicineId, setSelectedMedicineId] = useState(dashboard?.medicines[0]?.id ?? "");
   const [settingLocationId, setSettingLocationId] = useState(dashboard?.space.locations[0]?.id ?? "");
-  const [schedulePattern, setSchedulePattern] = useState("daily");
+  const [schedulePattern, setSchedulePattern] = useState(planForForm?.pattern ?? "daily");
   const selectedMedicine = kind === "quick-receive" ? dashboard?.medicines.find((item) => item.id === selectedMedicineId) ?? null : medicine;
   const settingLocation = dashboard?.space.locations.find((item) => item.id === settingLocationId);
+  const locations = dashboard?.space.locations ?? [];
+  const managedLocation = defaultLocationId ? locations.find((item)=>item.id===defaultLocationId) ?? null : null;
   const title: Record<ActionDialogKind, string> = { add: "手动新增药品和库存", receive: "新买的药放进药箱", "quick-receive": "从药品库选择入库", adjust: "修改现在的数量", transfer: "把药带到别处", loss: "记录减少的药", schedule: "吃药计划与药品设置", location: "我现在在哪里", "add-location": "添加存放地点", "location-settings": "主要地点与备用储备", invite: "邀请家人共同管理", "create-space": "新建用药人" };
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null);
@@ -212,7 +225,6 @@ function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId,
       await submit(action, payload);
     } catch (err) { setError(err instanceof Error ? err.message : "请检查输入内容"); }
   };
-  const locations = dashboard?.space.locations ?? [];
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="dialog" role="dialog" aria-modal="true" aria-label={title[kind]}>
     <div className="dialog-head"><div><p className="eyebrow">{selectedMedicine?.name}</p><h2>{title[kind]}</h2></div><button className="icon-button" onClick={close} aria-label="关闭"><X /></button></div>
     <form onSubmit={onSubmit}>
@@ -220,34 +232,34 @@ function ActionDialog({ kind, medicine, dashboard, photoUrls, defaultLocationId,
         <Field label="药品名称"><input name="name" required autoFocus placeholder="例如：降压药" /></Field>
         <div className="two-fields"><Field label="规格说明（选填）"><input name="specification" placeholder="例如：5mg" /></Field><Field label="最小单位"><select name="unitName" defaultValue="粒"><option>粒</option><option>片</option><option>袋</option><option>支</option><option>丸</option><option>毫升</option></select></Field></div>
         <div className="two-fields"><Field label="每盒有多少"><input name="unitsPerBox" type="number" min="0.001" step="any" defaultValue="50" required /></Field><Field label="可以保留几位小数"><select name="precision" defaultValue="0"><option value="0">只能整数</option><option value="1">1 位小数</option><option value="2">2 位小数</option></select></Field></div>
-        <Field label="先放在哪里"><LocationSelect name="locationId" locations={locations} defaultId={defaultLocationId} /></Field>
+        {managedLocation?<><input type="hidden" name="locationId" value={managedLocation.id}/><LocationTarget location={managedLocation.name}/></>:<Field label="先放在哪里"><LocationSelect name="locationId" locations={locations} defaultId={defaultLocationId} /></Field>}
         <div className="two-fields quantity-parts"><Field label="现在有多少整盒"><input name="boxes" type="number" min="0" step="1" defaultValue="0" required inputMode="numeric" /></Field><Field label="另外有多少零散"><input name="loose" type="number" min="0" step="any" defaultValue="0" required inputMode="decimal" /></Field></div>
         <p className="form-help">系统会按“整盒数量 × 每盒数量 + 零散数量”自动计算，不需要填写“3盒零5粒”。</p>
         <div className="two-fields"><Field label="每天计划用量"><input name="dailyDose" type="number" min="0" step="any" defaultValue="0" /></Field><Field label="低于多少提醒"><input name="safetyUnits" type="number" min="0" step="any" defaultValue="0" /></Field></div>
       </>}
       {kind === "quick-receive" && <>
         {dashboard?.medicines.length ? <><Field label="选择药品"><select name="medicineId" value={selectedMedicineId} onChange={(event) => setSelectedMedicineId(event.target.value)}>{dashboard.medicines.map((item) => <option key={item.id} value={item.id}>{productLabel(item)}</option>)}</select></Field>
-          {selectedMedicine && <><div className="selected-product"><div className="medicine-photo small">{selectedMedicine.photoPath && photoUrls[selectedMedicine.photoPath] ? <img src={photoUrls[selectedMedicine.photoPath]} alt={`${selectedMedicine.name}药盒`} /> : <Boxes size={22} />}</div><div><strong>{selectedMedicine.name}</strong><small>{productDescription(selectedMedicine)}</small></div></div><Field label="放到哪里"><LocationSelect name="locationId" locations={selectedMedicine.locations} defaultId={defaultLocationId} /></Field><div className="two-fields quantity-parts"><Field label="这次增加几整盒"><input name="boxes" type="number" min="0" step="1" defaultValue="0" required autoFocus inputMode="numeric" /></Field><Field label={`另外增加多少${selectedMedicine.unitName}`}><input name="loose" type="number" min="0" step="any" defaultValue="0" required inputMode="decimal" /></Field></div><Field label="简单说明（选填）"><input name="reason" placeholder="例如：本周购买" /></Field><div className="two-fields"><Field label="购买日期（选填）"><input name="receivedAt" type="date" defaultValue={isoDateOffset(0)} /></Field><Field label="有效期至（选填）"><input name="expiresOn" type="date" /></Field></div></>}</> : <p className="form-help">药品库还是空的，请先登记药品资料。</p>}
+          {selectedMedicine && <><div className="selected-product"><div className="medicine-photo small">{selectedMedicine.photoPath && photoUrls[selectedMedicine.photoPath] ? <img src={photoUrls[selectedMedicine.photoPath]} alt={`${selectedMedicine.name}药盒`} /> : <Boxes size={22} />}</div><div><strong>{selectedMedicine.name}</strong><small>{productDescription(selectedMedicine)}</small></div></div>{managedLocation?<><input type="hidden" name="locationId" value={managedLocation.id}/><LocationTarget location={managedLocation.name}/></>:<Field label="放到哪里"><LocationSelect name="locationId" locations={selectedMedicine.locations} defaultId={defaultLocationId} /></Field>}<div className="two-fields quantity-parts"><Field label="这次增加几整盒"><input name="boxes" type="number" min="0" step="1" defaultValue="0" required autoFocus inputMode="numeric" /></Field><Field label={`另外增加多少${selectedMedicine.unitName}`}><input name="loose" type="number" min="0" step="any" defaultValue="0" required inputMode="decimal" /></Field></div><Field label="简单说明（选填）"><input name="reason" placeholder="例如：本周购买" /></Field><div className="two-fields"><Field label="购买日期（选填）"><input name="receivedAt" type="date" defaultValue={isoDateOffset(0)} /></Field><Field label="有效期至（选填）"><input name="expiresOn" type="date" /></Field></div></>}</> : <p className="form-help">药品库还是空的，请先登记药品资料。</p>}
       </>}
       {(kind === "receive" || kind === "adjust" || kind === "loss") && medicine && <>
-        <Field label="哪个地方"><LocationSelect name="locationId" locations={medicine.locations} defaultId={defaultLocationId} /></Field>
+        {managedLocation?<><input type="hidden" name="locationId" value={managedLocation.id}/><LocationTarget location={managedLocation.name}/></>:<Field label="哪个地方"><LocationSelect name="locationId" locations={medicine.locations} defaultId={defaultLocationId} /></Field>}
         {kind === "receive" ? <div className="two-fields quantity-parts"><Field label="这次增加几整盒"><input name="boxes" type="number" min="0" step="1" defaultValue="0" required autoFocus inputMode="numeric" /></Field><Field label={`另外增加多少${medicine.unitName}`}><input name="loose" type="number" min="0" step="any" defaultValue="0" required inputMode="decimal" /></Field></div> : <Field label={kind === "adjust" ? "眼前可用的药有多少" : "这次减少多少"} hint={`${kind === "adjust" ? "不要把已经过期的药算进去；" : ""}例如“3盒零5${medicine.unitName}”或“155${medicine.unitName}”`}><input name="quantity" required autoFocus /></Field>}
         {kind !== "adjust" && <Field label="简单说明（选填）"><input name="reason" placeholder={kind === "loss" ? "例如：破损、过期" : "例如：本周购买"} /></Field>}
         {kind === "receive" && <div className="two-fields"><Field label="购买日期（选填）"><input name="receivedAt" type="date" defaultValue={isoDateOffset(0)} /></Field><Field label="有效期至（选填）"><input name="expiresOn" type="date" /></Field></div>}
         {kind === "adjust" && <p className="form-help">保存后，系统会从这次实际核对的数量继续计算，不会删除以前的记录。</p>}
       </>}
       {kind === "transfer" && medicine && <>
-        <div className="two-fields"><Field label="从哪里"><LocationSelect name="fromLocationId" locations={medicine.locations} defaultId={defaultLocationId} /></Field><Field label="带到哪里"><LocationSelect name="toLocationId" locations={medicine.locations} defaultIndex={defaultLocationId ? medicine.locations.findIndex((item) => item.id !== defaultLocationId) : 1} /></Field></div>
+        {managedLocation?<><input type="hidden" name="fromLocationId" value={managedLocation.id}/><LocationTarget location={managedLocation.name} prefix="调拨来源"/><Field label="带到哪里"><LocationSelect name="toLocationId" locations={medicine.locations.filter((item)=>item.id!==managedLocation.id)} /></Field></>:<div className="two-fields"><Field label="从哪里"><LocationSelect name="fromLocationId" locations={medicine.locations} defaultId={defaultLocationId} /></Field><Field label="带到哪里"><LocationSelect name="toLocationId" locations={medicine.locations} defaultIndex={defaultLocationId ? medicine.locations.findIndex((item) => item.id !== defaultLocationId) : 1} /></Field></div>}
         <Field label="带多少" hint={`例如“1盒零5${medicine.unitName}”`}><input name="quantity" required autoFocus /></Field>
       </>}
       {kind === "schedule" && medicine && <>
         <p className="form-help emphasis">这里只照医生已经确定的方案记录，软件不会推荐或改变剂量。</p>
         <div className="two-fields"><Field label={`每盒有多少${medicine.unitName}`} hint="修改后只影响新的入库，历史换算不会变化"><input name="unitsPerBox" type="number" min="0.001" step="any" defaultValue={medicine.unitsPerBox} required /></Field><Field label="低于多少提醒"><input name="safetyUnits" type="number" min="0" step="any" defaultValue={medicine.safetyUnits} /></Field></div>
         <Field label="家中最低保留数量"><input name="reserveUnits" type="number" min="0" step="any" defaultValue={medicine.reserveUnits} /></Field>
-        <div className="dose-fields"><Field label="早"><input name="morning" type="number" min="0" step="any" defaultValue={medicine.dailyDose || 0} /></Field><Field label="中"><input name="noon" type="number" min="0" step="any" defaultValue="0" /></Field><Field label="晚"><input name="evening" type="number" min="0" step="any" defaultValue="0" /></Field><Field label="睡前"><input name="bedtime" type="number" min="0" step="any" defaultValue="0" /></Field></div>
-        <div className="two-fields"><Field label="从哪天开始" hint="已有计划默认从明天调整，避免改变今天早些时候的推算"><input name="effectiveFrom" type="date" required defaultValue={isoDateOffset(1)} /></Field><Field label="用药规律"><select name="pattern" value={schedulePattern} onChange={(event) => setSchedulePattern(event.target.value)}><option value="daily">每天</option><option value="alternate">隔天</option><option value="weekdays">指定星期</option></select></Field></div>
-        {schedulePattern === "weekdays" && <Field label="选择服药日"><div className="weekday-picker">{[[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[7,"日"]].map(([day, label]) => <label key={day} className="weekday-option"><input type="checkbox" name="daysOfWeek" value={day} /><span>周{label}</span></label>)}</div></Field>}
-        <Field label="从哪里消耗"><select name="locationId" defaultValue={medicine.consumeLocationId ?? ""}><option value="">跟随我当时所在地点</option>{locations.map((x) => <option key={x.id} value={x.id}>固定从{x.name}</option>)}</select></Field>
+        <div className="dose-fields"><Field label="早"><input name="morning" type="number" min="0" step="any" defaultValue={planForForm?.morning ?? 0} /></Field><Field label="中"><input name="noon" type="number" min="0" step="any" defaultValue={planForForm?.noon ?? 0} /></Field><Field label="晚"><input name="evening" type="number" min="0" step="any" defaultValue={planForForm?.evening ?? 0} /></Field><Field label="睡前"><input name="bedtime" type="number" min="0" step="any" defaultValue={planForForm?.bedtime ?? 0} /></Field></div>
+        <div className="two-fields"><Field label="从哪天开始" hint="已有计划默认从明天调整，避免改变今天早些时候的推算"><input name="effectiveFrom" type="date" min={localDate??isoDateOffset(0)} required defaultValue={schedulePlan?.upcoming?.effectiveFrom??(localDate?addIsoDays(localDate,1):isoDateOffset(1))} /></Field><Field label="用药规律"><select name="pattern" value={schedulePattern} onChange={(event) => setSchedulePattern(event.target.value as SchedulePattern)}><option value="daily">每天</option><option value="alternate">隔天</option><option value="weekdays">指定星期</option></select></Field></div>
+        {schedulePattern === "weekdays" && <Field label="选择服药日"><div className="weekday-picker">{[[1,"一"],[2,"二"],[3,"三"],[4,"四"],[5,"五"],[6,"六"],[7,"日"]].map(([day, label]) => <label key={day} className="weekday-option"><input type="checkbox" name="daysOfWeek" value={day} defaultChecked={planForForm?.daysOfWeek.includes(Number(day))} /><span>周{label}</span></label>)}</div></Field>}
+        <Field label="从哪里消耗"><select name="locationId" defaultValue={planForForm?.locationId ?? medicine.consumeLocationId ?? ""}><option value="">跟随我当时所在地点</option>{locations.map((x) => <option key={x.id} value={x.id}>固定从{x.name}</option>)}</select></Field>
       </>}
       {kind === "location" && <><Field label="从现在起，我在哪里"><LocationSelect name="locationId" locations={locations} /></Field><Field label="开始时间"><input name="effectiveFrom" type="datetime-local" defaultValue={localDateTime()} required /></Field><p className="form-help">这只影响之后的计划消耗，之前的记录不会改变。</p></>}
       {kind === "add-location" && <><Field label="地点名称"><input name="name" required autoFocus placeholder="例如：学校、随身药盒" /></Field><div className="two-fields"><Field label="地点用途"><select name="isPrimary" defaultValue="false"><option value="false">备用地点</option><option value="true">主要地点</option></select></Field><Field label="希望备用多少天"><input name="targetDays" type="number" min="1" max="365" step="1" defaultValue="7" /></Field></div><p className="form-help">主要地点通常是家里。备用地点会按照吃药计划换算为整盒储备目标；设为新的主要地点后，原主要地点自动变为备用。</p></>}
@@ -330,6 +342,7 @@ function AuthPanel({ signIn, signUp }: { signIn: (email: string, password: strin
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>; }
+function LocationTarget({ location, prefix="本次操作地点" }: { location: string; prefix?: string }) { return <div className="location-target"><MapPin size={19}/><span>{prefix}<strong>{location}</strong></span><small>由当前库存视图自动选定</small></div>; }
 function LocationSelect({ name, locations, defaultIndex = 0, defaultId }: { name: string; locations: Array<{ id: string; name: string }>; defaultIndex?: number; defaultId?: string | null }) { const fallback = locations[Math.min(Math.max(defaultIndex,0), Math.max(0, locations.length - 1))]?.id; return <select name={name} defaultValue={locations.some((item) => item.id === defaultId) ? defaultId ?? undefined : fallback}>{locations.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>; }
 function EmptyState({ title, text, action, actionLabel = "开始添加" }: { title: string; text: string; action?: () => void; actionLabel?: string }) { return <div className="empty-state"><span><Boxes size={32} /></span><h2>{title}</h2><p>{text}</p>{action && <button className="primary-button" onClick={action}><Plus size={19} />{actionLabel}</button>}</div>; }
 function Loading() { return <main className="loading-page"><div className="brand-mark">药</div><p>正在打开家庭药箱…</p></main>; }
@@ -338,6 +351,7 @@ function formatDateTime(value: string) { return new Intl.DateTimeFormat("zh-CN",
 function localDateTime() { const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000); return now.toISOString().slice(0, 16); }
 function dateAfterDays(days: number) { return new Date(Date.now() + days * 86_400_000).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }); }
 function isoDateOffset(days: number) { const date = new Date(); date.setDate(date.getDate() + days); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
+function addIsoDays(value: string, days: number) { const [year,month,date]=value.split("-").map(Number); return new Date(Date.UTC(year,month-1,date+days)).toISOString().slice(0,10); }
 function operationIcon(kind: string) { if (kind === "transfer") return <ArrowLeftRight />; if (kind === "adjust") return <ClipboardCheck />; if (kind === "undo") return <RotateCcw />; return <PackagePlus />; }
 function productDescription(medicine: MedicineSummary) { return [medicine.brand, medicine.dosageForm, medicine.specification, medicine.packagingSpec].filter(Boolean).join(" · ") || `每盒 ${medicine.unitsPerBox}${medicine.unitName}`; }
 function productLabel(medicine: MedicineSummary) { const details = [medicine.brand, medicine.dosageForm, medicine.specification].filter(Boolean).join(" · "); return details ? `${medicine.name}｜${details}` : medicine.name; }
